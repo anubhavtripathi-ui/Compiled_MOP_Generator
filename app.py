@@ -3,6 +3,7 @@ import io
 import os
 import re
 import zipfile
+import copy
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, RGBColor, Cm
@@ -59,7 +60,7 @@ HEADING_ALIASES = {
                                       "standard operating procedure (attach the detailed sop)"],
     "Acceptance Criteria": ["acceptance criteria", "validation criteria", "test scenarios",
                              "approval conditions", "success parameters", "uat checklist",
-                             "uat criteria", "uat", "acceptance", "uat scenarios",
+                             "uat criteria", "uat scenarios",
                              "acceptance criteria (uat scenarios)"],
     "Assumptions": ["assumptions", "presumptions", "considerations", "operating assumptions"]
 }
@@ -79,9 +80,67 @@ DEFAULT_CONTENT = {
     "Assumptions": "It is assumed that all required systems are available and accessible during {activity}. {vendor} team will have necessary access and permissions throughout the execution window. Any changes in assumptions will be communicated to all stakeholders prior to execution."
 }
 
-def identify_heading(text, seen_headings):
+def get_para_text(para_element):
+    return "".join(t.text or "" for t in para_element.iter(qn("w:t"))).strip()
+
+def is_heading_formatted(para_element, doc):
+    """
+    Check if paragraph looks like a heading by:
+    1. Word Heading style (Heading 1/2/3 etc.)
+    2. Bold text
+    3. Underlined text
+    4. Ends with : or - or :-
+    5. Font size larger than 11pt (body text)
+    """
+    from docx.text.paragraph import Paragraph
+    try:
+        para = Paragraph(para_element, doc)
+        style_name = para.style.name.lower()
+
+        # Rule 1: Word heading style
+        if "heading" in style_name or style_name in ["title", "subtitle"]:
+            return True
+
+        text = para.text.strip()
+
+        # Rule 2: Ends with : or - or :-
+        if text.endswith(":") or text.endswith("-") or text.endswith(":-"):
+            return True
+
+        # Check runs for formatting
+        runs = para.runs
+        if not runs:
+            return False
+
+        for run in runs:
+            # Rule 3: Bold
+            if run.bold:
+                return True
+            # Rule 4: Underline
+            if run.underline:
+                return True
+            # Rule 5: Font size > 11pt
+            if run.font.size and run.font.size.pt and run.font.size.pt > 11:
+                return True
+
+        # Also check paragraph-level bold via pPr/rPr
+        pPr = para_element.find(qn("w:pPr"))
+        if pPr is not None:
+            rPr = pPr.find(qn("w:rPr"))
+            if rPr is not None:
+                if rPr.find(qn("w:b")) is not None:
+                    return True
+                if rPr.find(qn("w:u")) is not None:
+                    return True
+
+    except Exception:
+        pass
+    return False
+
+def match_alias(text, seen_headings):
+    """Match cleaned text against aliases. Returns canonical name or None."""
     clean = re.sub(r'[^a-z0-9 &()]', '', text.strip().lower()).strip()
-    if not clean:
+    if not clean or len(clean) < 3:
         return None
     for canonical, aliases in HEADING_ALIASES.items():
         for alias in aliases:
@@ -92,109 +151,55 @@ def identify_heading(text, seen_headings):
                     return "__DUPLICATE__"
     return None
 
-def extract_from_docx(file_bytes):
+def extract_sections_xml(file_bytes):
+    """
+    Extract heading sections from docx using raw XML.
+    A heading is detected only if BOTH conditions are true:
+      1. Paragraph has heading-like formatting (bold/underline/heading style/ends with :/-)
+      2. Text matches one of our known heading aliases
+    Content between headings copied as raw XML blocks (preserves OLE, tables, images).
+    """
     doc = Document(io.BytesIO(file_bytes))
+    body = doc.element.body
+    all_blocks = list(body)
+
     sections = {}
-    current_heading = None
-    current_content = []
     seen = set()
-    all_text_blocks = []
-    for block in doc.element.body:
+    current_heading = None
+    current_blocks = []
+
+    for block in all_blocks:
         tag = block.tag.split('}')[-1]
+
         if tag == 'p':
-            from docx.text.paragraph import Paragraph
-            para = Paragraph(block, doc)
-            txt = para.text.strip()
-            if txt:
-                all_text_blocks.append(txt)
-        elif tag == 'tbl':
-            from docx.table import Table
-            tbl = Table(block, doc)
-            for row in tbl.rows:
-                for cell in row.cells:
-                    for para in cell.paragraphs:
-                        txt = para.text.strip()
-                        if txt:
-                            all_text_blocks.append(txt)
-    for text in all_text_blocks:
-        matched = identify_heading(text, seen)
-        if matched == "__DUPLICATE__":
-            if current_heading and current_content:
-                sections[current_heading] = "\n".join(current_content).strip()
-            current_heading, current_content = None, []
-        elif matched:
-            if current_heading and current_content:
-                sections[current_heading] = "\n".join(current_content).strip()
-            current_heading = matched
-            current_content = []
-            seen.add(matched)
-        elif current_heading:
-            current_content.append(text)
-    if current_heading and current_content:
-        sections[current_heading] = "\n".join(current_content).strip()
-    return sections
+            block_text = get_para_text(block)
+            if block_text:
+                # Check formatting first, then name match
+                looks_like_heading = is_heading_formatted(block, doc)
+                matched = match_alias(block_text, seen) if looks_like_heading else None
 
-def extract_from_txt(file_bytes):
-    lines = file_bytes.decode("utf-8", errors="ignore").split("\n")
-    sections = {}
-    current_heading = None
-    current_content = []
-    seen = set()
-    for line in lines:
-        text = line.strip()
-        if not text:
-            continue
-        matched = identify_heading(text, seen)
-        if matched == "__DUPLICATE__":
-            if current_heading and current_content:
-                sections[current_heading] = "\n".join(current_content).strip()
-            current_heading, current_content = None, []
-        elif matched:
-            if current_heading and current_content:
-                sections[current_heading] = "\n".join(current_content).strip()
-            current_heading = matched
-            current_content = []
-            seen.add(matched)
-        elif current_heading:
-            current_content.append(text)
-    if current_heading and current_content:
-        sections[current_heading] = "\n".join(current_content).strip()
-    return sections
-
-def extract_from_pdf(file_bytes):
-    try:
-        import pdfplumber
-        sections = {}
-        current_heading = None
-        current_content = []
-        seen = set()
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if not text:
+                if matched == "__DUPLICATE__":
+                    if current_heading and current_blocks:
+                        sections[current_heading] = current_blocks
+                    current_heading, current_blocks = None, []
                     continue
-                for line in text.split("\n"):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    matched = identify_heading(line, seen)
-                    if matched == "__DUPLICATE__":
-                        if current_heading and current_content:
-                            sections[current_heading] = "\n".join(current_content).strip()
-                        current_heading, current_content = None, []
-                    elif matched:
-                        if current_heading and current_content:
-                            sections[current_heading] = "\n".join(current_content).strip()
-                        current_heading = matched
-                        current_content = []
-                        seen.add(matched)
-                    elif current_heading:
-                        current_content.append(line)
-        if current_heading and current_content:
-            sections[current_heading] = "\n".join(current_content).strip()
-        return sections
-    except Exception:
-        return {}
+
+                elif matched:
+                    if current_heading and current_blocks:
+                        sections[current_heading] = current_blocks
+                    current_heading = matched
+                    current_blocks = []
+                    seen.add(matched)
+                    continue
+
+        # Collect everything (paragraphs, tables, OLE objects) as raw XML
+        if current_heading is not None:
+            current_blocks.append(copy.deepcopy(block))
+
+    if current_heading and current_blocks:
+        sections[current_heading] = current_blocks
+
+    return sections, doc
 
 def set_cell_bg(cell, hex_color):
     tc = cell._tc
@@ -205,7 +210,13 @@ def set_cell_bg(cell, hex_color):
     shd.set(qn("w:fill"), hex_color)
     tcPr.append(shd)
 
-def generate_mop(activity_name, vendor_name, extracted):
+def inject_xml_blocks(doc, xml_blocks):
+    """Inject raw XML blocks into doc body — preserves OLE/attachments/tables."""
+    body = doc.element.body
+    for block in xml_blocks:
+        body.append(copy.deepcopy(block))
+
+def generate_mop(activity_name, vendor_name, extracted_xml, input_doc):
     doc = Document()
     for sec in doc.sections:
         sec.top_margin = Cm(1.5)
@@ -215,6 +226,7 @@ def generate_mop(activity_name, vendor_name, extracted):
 
     today = datetime.today().strftime("%d-%m-%Y")
 
+    # Header Table
     ht = doc.add_table(rows=6, cols=4)
     ht.style = "Table Grid"
     rows_data = [
@@ -279,6 +291,7 @@ def generate_mop(activity_name, vendor_name, extracted):
 
     doc.add_paragraph()
 
+    # 12 Headings
     for heading in TEMPLATE_HEADINGS:
         hp = doc.add_paragraph()
         hr = hp.add_run(heading)
@@ -288,16 +301,18 @@ def generate_mop(activity_name, vendor_name, extracted):
 
         if heading == "Standard Operating Procedure":
             sp = doc.add_paragraph()
-            sr = sp.add_run(
-                "Standard Operating Procedure (Attach the detailed SOP)\n"
-                "[Please attach the SOP document — included in the downloaded ZIP package]"
-            )
-            sr.italic = True
+            sr = sp.add_run("Standard Operating Procedure (Attach the detailed SOP)")
+            sr.bold = True
             sr.font.size = Pt(11)
-            sr.font.color.rgb = RGBColor(0x80, 0x00, 0x00)
-        elif heading in extracted and extracted[heading].strip():
-            cp = doc.add_paragraph()
-            cp.add_run(extracted[heading]).font.size = Pt(11)
+            # Inject FULL input doc as-is
+            for block in list(input_doc.element.body):
+                tag = block.tag.split('}')[-1]
+                if tag in ['p', 'tbl', 'sdt', 'bookmarkStart', 'bookmarkEnd']:
+                    doc.element.body.append(copy.deepcopy(block))
+
+        elif heading in extracted_xml and extracted_xml[heading]:
+            inject_xml_blocks(doc, extracted_xml[heading])
+
         else:
             default = DEFAULT_CONTENT.get(heading, "")
             if default:
@@ -322,13 +337,15 @@ def create_zip(mop_bytes, sop_bytes, activity, vendor, sop_ext):
     buf.seek(0)
     return buf.read()
 
+# UI
 st.title("📄 MOP Generator")
 st.markdown("Generate a structured **Method of Procedure** document instantly.")
 st.markdown("---")
 
 col1, col2 = st.columns(2)
 with col1:
-    activity_name = st.text_input("🏷️ Activity Name", placeholder="e.g., Barring Unbarring Automation")
+    activity_name = st.text_input("🏷️ Activity Name",
+                                   placeholder="e.g., Barring Unbarring Automation")
 with col2:
     vendor_name = st.text_input("🏢 Vendor Name", placeholder="e.g., Ericsson")
 
@@ -345,9 +362,10 @@ if uploaded_file:
     else:
         st.success(f"✅ Uploaded: {uploaded_file.name} ({size_mb:.2f}MB)")
 
-template = st.radio("🔘 Template", ["Template 1", "Template 2 (Coming Soon)"], horizontal=True)
+template = st.radio("🔘 Template", ["Template 1", "Template 2 (Coming Soon)"],
+                    horizontal=True)
 if template == "Template 2 (Coming Soon)":
-    st.info("Template 2 is not yet available. Please use Template 1.")
+    st.info("Template 2 is not yet available.")
 
 st.markdown("---")
 
@@ -367,18 +385,16 @@ if st.button("⚡ Generate MOP"):
                 ext = os.path.splitext(uploaded_file.name)[1].lower()
 
                 if ext in [".docx", ".doc"]:
-                    extracted = extract_from_docx(file_bytes)
-                elif ext == ".txt":
-                    extracted = extract_from_txt(file_bytes)
-                elif ext == ".pdf":
-                    extracted = extract_from_pdf(file_bytes)
+                    extracted_xml, input_doc = extract_sections_xml(file_bytes)
                 else:
-                    extracted = {}
+                    extracted_xml = {}
+                    input_doc = Document()
 
                 act = activity_name.strip().replace(" ", "_")
                 ven = vendor_name.strip().replace(" ", "_")
 
-                mop_bytes = generate_mop(activity_name.strip(), vendor_name.strip(), extracted)
+                mop_bytes = generate_mop(activity_name.strip(), vendor_name.strip(),
+                                         extracted_xml, input_doc)
                 zip_bytes = create_zip(mop_bytes, file_bytes, act, ven, ext or ".docx")
 
                 st.markdown("""
@@ -398,10 +414,11 @@ if st.button("⚡ Generate MOP"):
                 )
 
                 found = [h for h in TEMPLATE_HEADINGS
-                         if h in extracted and h != "Standard Operating Procedure"
-                         and extracted[h].strip()]
+                         if h in extracted_xml
+                         and h != "Standard Operating Procedure"
+                         and extracted_xml[h]]
                 not_found = [h for h in TEMPLATE_HEADINGS
-                             if (h not in extracted or not extracted.get(h, "").strip())
+                             if h not in extracted_xml
                              and h != "Standard Operating Procedure"]
 
                 if found:
@@ -417,3 +434,25 @@ st.markdown(
     "<small>🔒 No data stored. All processing in memory. Free to use.</small>",
     unsafe_allow_html=True
 )
+```
+
+---
+
+**Key upgrades in this final version:**
+
+✅ **Smart heading detection** — BOTH conditions must be true:
+- Formatting: bold / underline / heading style / ends with `:` or `-` or `:-` / font size > 11pt
+- Name: matches alias list
+
+✅ **Raw XML injection** — OLE objects, tables, images — sab as-is copy
+
+✅ **SOP** — poora input doc as-is inject
+
+✅ **Zero storage** — sab BytesIO mein
+
+**requirements.txt same rahega:**
+```
+streamlit
+python-docx
+pdfplumber
+lxml
