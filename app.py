@@ -41,22 +41,26 @@ HEADING_ALIASES = {
                       "operation type", "activity classification"],
     "Domain in Scope": ["domain in scope", "applicable domain", "functional scope", "domain"],
     "Pre-requisites": ["pre-requisites", "prerequisites", "pre-conditions",
-                       "initial requirements", "mandatory conditions"],
-    "Inventory Details": ["inventory details", "infrastructure details", "system inventory", "inventory"],
+                       "initial requirements", "mandatory conditions", "preconditions"],
+    "Inventory Details": ["inventory details", "infrastructure details",
+                          "system inventory", "inventory"],
     "Node Connectivity Process": ["node connectivity process", "connectivity workflow",
                                    "integration process", "network configuration steps",
                                    "connection procedure", "node connectivity"],
     "Identity and Access Management": ["identity and access management", "access control details",
-                                        "authentication process", "authorization matrix", "iam"],
+                                        "authentication process", "authorization matrix",
+                                        "iam", "identity & access management"],
     "Activity Triggering Method": ["activity triggering method", "trigger mechanism",
                                     "initiation method", "activation process",
                                     "execution trigger", "event trigger", "triggering method"],
     "Standard Operating Procedure": ["standard operating procedure", "operational guidelines",
                                       "process manual", "execution procedure", "work instructions",
-                                      "step-by-step guide", "sop"],
+                                      "step-by-step guide", "sop",
+                                      "standard operating procedure (attach the detailed sop)"],
     "Acceptance Criteria": ["acceptance criteria", "validation criteria", "test scenarios",
                              "approval conditions", "success parameters", "uat checklist",
-                             "uat", "uat criteria", "acceptance", "uat scenarios"],
+                             "uat criteria", "uat", "acceptance", "uat scenarios",
+                             "acceptance criteria (uat scenarios)"],
     "Assumptions": ["assumptions", "presumptions", "considerations", "operating assumptions"]
 }
 
@@ -77,9 +81,11 @@ DEFAULT_CONTENT = {
 
 def identify_heading(text, seen_headings):
     clean = re.sub(r'[^a-z0-9 &()]', '', text.strip().lower()).strip()
+    if not clean:
+        return None
     for canonical, aliases in HEADING_ALIASES.items():
         for alias in aliases:
-            if alias in clean or clean in alias:
+            if alias == clean or alias in clean or clean in alias:
                 if canonical not in seen_headings:
                     return canonical
                 else:
@@ -88,11 +94,29 @@ def identify_heading(text, seen_headings):
 
 def extract_from_docx(file_bytes):
     doc = Document(io.BytesIO(file_bytes))
-    sections, current_heading, current_content, seen = {}, None, [], set()
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if not text:
-            continue
+    sections = {}
+    current_heading = None
+    current_content = []
+    seen = set()
+    all_text_blocks = []
+    for block in doc.element.body:
+        tag = block.tag.split('}')[-1]
+        if tag == 'p':
+            from docx.text.paragraph import Paragraph
+            para = Paragraph(block, doc)
+            txt = para.text.strip()
+            if txt:
+                all_text_blocks.append(txt)
+        elif tag == 'tbl':
+            from docx.table import Table
+            tbl = Table(block, doc)
+            for row in tbl.rows:
+                for cell in row.cells:
+                    for para in cell.paragraphs:
+                        txt = para.text.strip()
+                        if txt:
+                            all_text_blocks.append(txt)
+    for text in all_text_blocks:
         matched = identify_heading(text, seen)
         if matched == "__DUPLICATE__":
             if current_heading and current_content:
@@ -101,7 +125,8 @@ def extract_from_docx(file_bytes):
         elif matched:
             if current_heading and current_content:
                 sections[current_heading] = "\n".join(current_content).strip()
-            current_heading, current_content = matched, []
+            current_heading = matched
+            current_content = []
             seen.add(matched)
         elif current_heading:
             current_content.append(text)
@@ -111,7 +136,10 @@ def extract_from_docx(file_bytes):
 
 def extract_from_txt(file_bytes):
     lines = file_bytes.decode("utf-8", errors="ignore").split("\n")
-    sections, current_heading, current_content, seen = {}, None, [], set()
+    sections = {}
+    current_heading = None
+    current_content = []
+    seen = set()
     for line in lines:
         text = line.strip()
         if not text:
@@ -124,7 +152,8 @@ def extract_from_txt(file_bytes):
         elif matched:
             if current_heading and current_content:
                 sections[current_heading] = "\n".join(current_content).strip()
-            current_heading, current_content = matched, []
+            current_heading = matched
+            current_content = []
             seen.add(matched)
         elif current_heading:
             current_content.append(text)
@@ -135,7 +164,10 @@ def extract_from_txt(file_bytes):
 def extract_from_pdf(file_bytes):
     try:
         import pdfplumber
-        sections, current_heading, current_content, seen = {}, None, [], set()
+        sections = {}
+        current_heading = None
+        current_content = []
+        seen = set()
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
@@ -153,7 +185,8 @@ def extract_from_pdf(file_bytes):
                     elif matched:
                         if current_heading and current_content:
                             sections[current_heading] = "\n".join(current_content).strip()
-                        current_heading, current_content = matched, []
+                        current_heading = matched
+                        current_content = []
                         seen.add(matched)
                     elif current_heading:
                         current_content.append(line)
@@ -174,11 +207,11 @@ def set_cell_bg(cell, hex_color):
 
 def generate_mop(activity_name, vendor_name, extracted):
     doc = Document()
-    for section in doc.sections:
-        section.top_margin = Cm(1.5)
-        section.bottom_margin = Cm(1.5)
-        section.left_margin = Cm(2)
-        section.right_margin = Cm(2)
+    for sec in doc.sections:
+        sec.top_margin = Cm(1.5)
+        sec.bottom_margin = Cm(1.5)
+        sec.left_margin = Cm(2)
+        sec.right_margin = Cm(2)
 
     today = datetime.today().strftime("%d-%m-%Y")
 
@@ -222,10 +255,10 @@ def generate_mop(activity_name, vendor_name, extracted):
 
     rht = doc.add_table(rows=4, cols=4)
     rht.style = "Table Grid"
-    headers = ["Version No.", "Revision Date", "Edited By", "Description of Change"]
+    col_headers = ["Version No.", "Revision Date", "Edited By", "Description of Change"]
     for i, cell in enumerate(rht.rows[0].cells):
         set_cell_bg(cell, "00BFFF")
-        cell.text = headers[i]
+        cell.text = col_headers[i]
         for para in cell.paragraphs:
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for run in para.runs:
@@ -240,6 +273,10 @@ def generate_mop(activity_name, vendor_name, extracted):
         for run in cell.paragraphs[0].runs:
             run.font.size = Pt(10)
 
+    for row in rht.rows[2:]:
+        for cell in row.cells:
+            cell.text = ""
+
     doc.add_paragraph()
 
     for heading in TEMPLATE_HEADINGS:
@@ -253,7 +290,7 @@ def generate_mop(activity_name, vendor_name, extracted):
             sp = doc.add_paragraph()
             sr = sp.add_run(
                 "Standard Operating Procedure (Attach the detailed SOP)\n"
-                "[Please attach the SOP document included in the downloaded ZIP package]"
+                "[Please attach the SOP document — included in the downloaded ZIP package]"
             )
             sr.italic = True
             sr.font.size = Pt(11)
@@ -263,9 +300,10 @@ def generate_mop(activity_name, vendor_name, extracted):
             cp.add_run(extracted[heading]).font.size = Pt(11)
         else:
             default = DEFAULT_CONTENT.get(heading, "")
-            filled = default.format(activity=activity_name, vendor=vendor_name)
-            cp = doc.add_paragraph()
-            cp.add_run(filled).font.size = Pt(11)
+            if default:
+                filled = default.format(activity=activity_name, vendor=vendor_name)
+                cp = doc.add_paragraph()
+                cp.add_run(filled).font.size = Pt(11)
 
         doc.add_paragraph()
 
@@ -290,40 +328,40 @@ st.markdown("---")
 
 col1, col2 = st.columns(2)
 with col1:
-    activity_name = st.text_input("Activity Name", placeholder="e.g., Barring Unbarring Automation")
+    activity_name = st.text_input("🏷️ Activity Name", placeholder="e.g., Barring Unbarring Automation")
 with col2:
-    vendor_name = st.text_input("Vendor Name", placeholder="e.g., Ericsson")
+    vendor_name = st.text_input("🏢 Vendor Name", placeholder="e.g., Ericsson")
 
 uploaded_file = st.file_uploader(
-    "Upload Input MOP File (Max 30MB — .docx, .doc, .pdf, .txt)",
+    "📁 Upload Input MOP File (Max 30MB — .docx, .doc, .pdf, .txt)",
     type=["docx", "doc", "pdf", "txt"]
 )
 
 if uploaded_file:
     size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
     if size_mb > 30:
-        st.error(f"File too large ({size_mb:.1f}MB). Max allowed: 30MB.")
+        st.error(f"❌ File too large ({size_mb:.1f}MB). Max: 30MB.")
         st.stop()
     else:
-        st.success(f"Uploaded: {uploaded_file.name} ({size_mb:.2f}MB)")
+        st.success(f"✅ Uploaded: {uploaded_file.name} ({size_mb:.2f}MB)")
 
-template = st.radio("Template", ["Template 1", "Template 2 (Coming Soon)"], horizontal=True)
+template = st.radio("🔘 Template", ["Template 1", "Template 2 (Coming Soon)"], horizontal=True)
 if template == "Template 2 (Coming Soon)":
     st.info("Template 2 is not yet available. Please use Template 1.")
 
 st.markdown("---")
 
-if st.button("Generate MOP"):
+if st.button("⚡ Generate MOP"):
     if not activity_name.strip():
-        st.error("Please enter the Activity Name.")
+        st.error("❌ Please enter the Activity Name.")
     elif not vendor_name.strip():
-        st.error("Please enter the Vendor Name.")
+        st.error("❌ Please enter the Vendor Name.")
     elif not uploaded_file:
-        st.error("Please upload an input MOP file.")
+        st.error("❌ Please upload an input MOP file.")
     elif template == "Template 2 (Coming Soon)":
-        st.warning("Template 2 is not yet available.")
+        st.warning("⚠️ Template 2 not available yet.")
     else:
-        with st.spinner("Generating your MOP... Please wait."):
+        with st.spinner("🔄 Generating your MOP... Please wait."):
             try:
                 file_bytes = uploaded_file.getvalue()
                 ext = os.path.splitext(uploaded_file.name)[1].lower()
@@ -345,30 +383,37 @@ if st.button("Generate MOP"):
 
                 st.markdown("""
                 <div class='success-box'>
-                    MOP Generated Successfully!<br>
+                    ✅ <strong>MOP Generated Successfully!</strong><br><br>
                     Your ZIP contains:<br>
-                    &nbsp;&nbsp; ActivityName_VendorName_MOP.docx — Formatted MOP<br>
-                    &nbsp;&nbsp; SOP_ActivityName.[ext] — Attach this in the SOP section
+                    &nbsp;&nbsp;📄 <strong>ActivityName_VendorName_MOP.docx</strong> — Formatted Output MOP<br>
+                    &nbsp;&nbsp;📎 <strong>SOP_ActivityName.[ext]</strong> — Attach manually in SOP section
                 </div>
                 """, unsafe_allow_html=True)
 
                 st.download_button(
-                    label="Download ZIP",
+                    label="📥 Download ZIP",
                     data=zip_bytes,
                     file_name=f"{act}_{ven}_MOP_Package.zip",
                     mime="application/zip"
                 )
 
-                found = [h for h in TEMPLATE_HEADINGS if h in extracted and h != "Standard Operating Procedure"]
-                not_found = [h for h in TEMPLATE_HEADINGS if h not in extracted and h != "Standard Operating Procedure"]
+                found = [h for h in TEMPLATE_HEADINGS
+                         if h in extracted and h != "Standard Operating Procedure"
+                         and extracted[h].strip()]
+                not_found = [h for h in TEMPLATE_HEADINGS
+                             if (h not in extracted or not extracted.get(h, "").strip())
+                             and h != "Standard Operating Procedure"]
+
                 if found:
-                    st.info(f"Headings found in input: {', '.join(found)}")
+                    st.info(f"✅ Headings found in input: {', '.join(found)}")
                 if not_found:
-                    st.warning(f"Filled with defaults: {', '.join(not_found)}")
+                    st.warning(f"📝 Filled with defaults: {', '.join(not_found)}")
 
             except Exception as e:
-                st.error(f"An error occurred: {str(e)}")
+                st.error(f"❌ Error: {str(e)}")
 
 st.markdown("---")
-st.markdown("<small>No data is stored. All processing happens in memory. Free to use.</small>", unsafe_allow_html=True)
-
+st.markdown(
+    "<small>🔒 No data stored. All processing in memory. Free to use.</small>",
+    unsafe_allow_html=True
+)
