@@ -244,4 +244,130 @@ def generate_mop(activity_name, vendor_name, extracted):
 
     for heading in TEMPLATE_HEADINGS:
         hp = doc.add_paragraph()
-        hr = hp.add
+        hr = hp.add_run(heading)
+        hr.bold = True
+        hr.font.size = Pt(13)
+        hr.font.color.rgb = RGBColor(0x00, 0x33, 0x66)
+
+        if heading == "Standard Operating Procedure":
+            sp = doc.add_paragraph()
+            sr = sp.add_run(
+                "Standard Operating Procedure (Attach the detailed SOP)\n"
+                "[Please attach the SOP document included in the downloaded ZIP package]"
+            )
+            sr.italic = True
+            sr.font.size = Pt(11)
+            sr.font.color.rgb = RGBColor(0x80, 0x00, 0x00)
+        elif heading in extracted and extracted[heading].strip():
+            cp = doc.add_paragraph()
+            cp.add_run(extracted[heading]).font.size = Pt(11)
+        else:
+            default = DEFAULT_CONTENT.get(heading, "")
+            filled = default.format(activity=activity_name, vendor=vendor_name)
+            cp = doc.add_paragraph()
+            cp.add_run(filled).font.size = Pt(11)
+
+        doc.add_paragraph()
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+def create_zip(mop_bytes, sop_bytes, activity, vendor, sop_ext):
+    mop_name = f"{activity}_{vendor}_MOP.docx"
+    sop_name = f"SOP_{activity}{sop_ext}"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(mop_name, mop_bytes)
+        zf.writestr(sop_name, sop_bytes)
+    buf.seek(0)
+    return buf.read()
+
+st.title("📄 MOP Generator")
+st.markdown("Generate a structured **Method of Procedure** document instantly.")
+st.markdown("---")
+
+col1, col2 = st.columns(2)
+with col1:
+    activity_name = st.text_input("Activity Name", placeholder="e.g., Barring Unbarring Automation")
+with col2:
+    vendor_name = st.text_input("Vendor Name", placeholder="e.g., Ericsson")
+
+uploaded_file = st.file_uploader(
+    "Upload Input MOP File (Max 30MB — .docx, .doc, .pdf, .txt)",
+    type=["docx", "doc", "pdf", "txt"]
+)
+
+if uploaded_file:
+    size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
+    if size_mb > 30:
+        st.error(f"File too large ({size_mb:.1f}MB). Max allowed: 30MB.")
+        st.stop()
+    else:
+        st.success(f"Uploaded: {uploaded_file.name} ({size_mb:.2f}MB)")
+
+template = st.radio("Template", ["Template 1", "Template 2 (Coming Soon)"], horizontal=True)
+if template == "Template 2 (Coming Soon)":
+    st.info("Template 2 is not yet available. Please use Template 1.")
+
+st.markdown("---")
+
+if st.button("Generate MOP"):
+    if not activity_name.strip():
+        st.error("Please enter the Activity Name.")
+    elif not vendor_name.strip():
+        st.error("Please enter the Vendor Name.")
+    elif not uploaded_file:
+        st.error("Please upload an input MOP file.")
+    elif template == "Template 2 (Coming Soon)":
+        st.warning("Template 2 is not yet available.")
+    else:
+        with st.spinner("Generating your MOP... Please wait."):
+            try:
+                file_bytes = uploaded_file.getvalue()
+                ext = os.path.splitext(uploaded_file.name)[1].lower()
+
+                if ext in [".docx", ".doc"]:
+                    extracted = extract_from_docx(file_bytes)
+                elif ext == ".txt":
+                    extracted = extract_from_txt(file_bytes)
+                elif ext == ".pdf":
+                    extracted = extract_from_pdf(file_bytes)
+                else:
+                    extracted = {}
+
+                act = activity_name.strip().replace(" ", "_")
+                ven = vendor_name.strip().replace(" ", "_")
+
+                mop_bytes = generate_mop(activity_name.strip(), vendor_name.strip(), extracted)
+                zip_bytes = create_zip(mop_bytes, file_bytes, act, ven, ext or ".docx")
+
+                st.markdown("""
+                <div class='success-box'>
+                    MOP Generated Successfully!<br>
+                    Your ZIP contains:<br>
+                    &nbsp;&nbsp; ActivityName_VendorName_MOP.docx — Formatted MOP<br>
+                    &nbsp;&nbsp; SOP_ActivityName.[ext] — Attach this in the SOP section
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.download_button(
+                    label="Download ZIP",
+                    data=zip_bytes,
+                    file_name=f"{act}_{ven}_MOP_Package.zip",
+                    mime="application/zip"
+                )
+
+                found = [h for h in TEMPLATE_HEADINGS if h in extracted and h != "Standard Operating Procedure"]
+                not_found = [h for h in TEMPLATE_HEADINGS if h not in extracted and h != "Standard Operating Procedure"]
+                if found:
+                    st.info(f"Headings found in input: {', '.join(found)}")
+                if not_found:
+                    st.warning(f"Filled with defaults: {', '.join(not_found)}")
+
+            except Exception as e:
+                st.error(f"An error occurred: {str(e)}")
+
+st.markdown("---")
+st.markdown("<small>No data is stored. All processing happens in memory. Free to use.</small>", unsafe_allow_html=True)
