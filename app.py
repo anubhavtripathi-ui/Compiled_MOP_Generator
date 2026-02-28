@@ -26,7 +26,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── HEADING ALIASES ──────────────────────────────────────────────────────────
 TEMPLATE_HEADINGS = [
     "Objective", "Activity Description", "Activity Type", "Domain in Scope",
     "Pre-requisites", "Inventory Details", "Node Connectivity Process",
@@ -71,12 +70,11 @@ DEFAULT_CONTENT = {
     "Node Connectivity Process": "The node connectivity process for {activity} involves verifying all network paths and connections. {vendor} team will ensure proper integration and connectivity between all nodes. Connectivity tests will be performed before and after the activity.",
     "Identity and Access Management": "Access management for {activity} will follow the standard IAM process defined by {vendor}. All user accounts and roles must be verified prior to execution. Access logs will be maintained for audit and compliance purposes.",
     "Activity Triggering Method": "The activity {activity} will be triggered based on the approved change request from {vendor}. Initiation will follow the standard trigger mechanism defined in the change management process. The execution will commence only after receiving explicit approval.",
-    "Standard Operating Procedure": "",  # Always blank/handled separately
+    "Standard Operating Procedure": "",
     "Acceptance Criteria": "The acceptance criteria for {activity} will be validated by {vendor} team post-execution. All UAT scenarios must pass before the activity is marked as complete. Any deviations from expected results must be documented and escalated immediately.",
     "Assumptions": "It is assumed that all required systems are available and accessible during {activity}. {vendor} team will have necessary access and permissions throughout the execution window. Any changes in assumptions will be communicated to all stakeholders prior to execution."
 }
 
-# ── PARSING ──────────────────────────────────────────────────────────────────
 def identify_heading(text, seen_headings):
     clean = re.sub(r'[^a-z0-9 &()]', '', text.strip().lower()).strip()
     for canonical, aliases in HEADING_ALIASES.items():
@@ -162,10 +160,9 @@ def extract_from_pdf(file_bytes):
         if current_heading and current_content:
             sections[current_heading] = "\n".join(current_content).strip()
         return sections
-    except:
+    except Exception:
         return {}
 
-# ── DOCX GENERATION ──────────────────────────────────────────────────────────
 def set_cell_bg(cell, hex_color):
     tc = cell._tc
     tcPr = tc.get_or_add_tcPr()
@@ -185,7 +182,6 @@ def generate_mop(activity_name, vendor_name, extracted):
 
     today = datetime.today().strftime("%d-%m-%Y")
 
-    # Header table
     ht = doc.add_table(rows=6, cols=4)
     ht.style = "Table Grid"
     rows_data = [
@@ -211,7 +207,6 @@ def generate_mop(activity_name, vendor_name, extracted):
 
     doc.add_paragraph()
 
-    # Title
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.LEFT
     tr = title.add_run("METHOD OF PROCEDURE")
@@ -220,7 +215,6 @@ def generate_mop(activity_name, vendor_name, extracted):
 
     doc.add_paragraph()
 
-    # Revision History
     rh = doc.add_paragraph()
     rhr = rh.add_run("Revision History (To be updated by Line/SME/AA)")
     rhr.bold = True
@@ -248,138 +242,6 @@ def generate_mop(activity_name, vendor_name, extracted):
 
     doc.add_paragraph()
 
-    # 12 Headings
     for heading in TEMPLATE_HEADINGS:
         hp = doc.add_paragraph()
-        hr = hp.add_run(heading)
-        hr.bold = True
-        hr.font.size = Pt(13)
-        hr.font.color.rgb = RGBColor(0x00, 0x33, 0x66)
-
-        if heading == "Standard Operating Procedure":
-            sp = doc.add_paragraph()
-            sr = sp.add_run("Standard Operating Procedure (Attach the detailed SOP)\n"
-                            "📎 [Please attach the SOP document — included in the downloaded ZIP package]")
-            sr.italic = True
-            sr.font.size = Pt(11)
-            sr.font.color.rgb = RGBColor(0x80, 0x00, 0x00)
-        elif heading in extracted and extracted[heading].strip():
-            cp = doc.add_paragraph()
-            cp.add_run(extracted[heading]).font.size = Pt(11)
-        else:
-            default = DEFAULT_CONTENT.get(heading, "")
-            filled = default.format(activity=activity_name, vendor=vendor_name)
-            cp = doc.add_paragraph()
-            cp.add_run(filled).font.size = Pt(11)
-
-        doc.add_paragraph()
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf.read()
-
-# ── ZIP ───────────────────────────────────────────────────────────────────────
-def create_zip(mop_bytes, sop_bytes, activity, vendor, sop_ext):
-    mop_name = f"{activity}_{vendor}_MOP.docx"
-    sop_name = f"SOP_{activity}{sop_ext}"
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(mop_name, mop_bytes)
-        zf.writestr(sop_name, sop_bytes)
-    buf.seek(0)
-    return buf.read()
-
-# ── UI ────────────────────────────────────────────────────────────────────────
-st.title("📄 MOP Generator")
-st.markdown("Generate a structured **Method of Procedure** document instantly.")
-st.markdown("---")
-
-col1, col2 = st.columns(2)
-with col1:
-    activity_name = st.text_input("🏷️ Activity Name", placeholder="e.g., Barring Unbarring Automation")
-with col2:
-    vendor_name = st.text_input("🏢 Vendor Name", placeholder="e.g., Ericsson")
-
-uploaded_file = st.file_uploader(
-    "📁 Upload Input MOP File (Max 30MB — .docx, .doc, .pdf, .txt)",
-    type=["docx", "doc", "pdf", "txt"]
-)
-
-if uploaded_file:
-    size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
-    if size_mb > 30:
-        st.error(f"❌ File too large ({size_mb:.1f}MB). Max allowed: 30MB.")
-        st.stop()
-    else:
-        st.success(f"✅ Uploaded: `{uploaded_file.name}` ({size_mb:.2f}MB)")
-
-template = st.radio("🔘 Template", ["Template 1", "Template 2 (Coming Soon)"], horizontal=True)
-if template == "Template 2 (Coming Soon)":
-    st.info("Template 2 is not yet available.")
-
-st.markdown("---")
-
-if st.button("⚡ Generate MOP"):
-    if not activity_name.strip():
-        st.error("❌ Enter Activity Name.")
-    elif not vendor_name.strip():
-        st.error("❌ Enter Vendor Name.")
-    elif not uploaded_file:
-        st.error("❌ Upload an input MOP file.")
-    elif template == "Template 2 (Coming Soon)":
-        st.warning("⚠️ Template 2 not available yet.")
-    else:
-        with st.spinner("🔄 Generating your MOP..."):
-            try:
-                file_bytes = uploaded_file.getvalue()
-                ext = os.path.splitext(uploaded_file.name)[1].lower()
-                if ext in [".docx", ".doc"]:
-                    extracted = extract_from_docx(file_bytes)
-                elif ext == ".txt":
-                    extracted = extract_from_txt(file_bytes)
-                elif ext == ".pdf":
-                    extracted = extract_from_pdf(file_bytes)
-                else:
-                    extracted = {}
-
-                act = activity_name.strip().replace(" ", "_")
-                ven = vendor_name.strip().replace(" ", "_")
-                mop_bytes = generate_mop(activity_name.strip(), vendor_name.strip(), extracted)
-                zip_bytes = create_zip(mop_bytes, file_bytes, act, ven, ext or ".docx")
-
-                st.markdown("""<div class='success-box'>
-                    ✅ <strong>MOP Generated Successfully!</strong><br>
-                    ZIP contains:<br>
-                    &nbsp;&nbsp;📄 <code>ActivityName_VendorName_MOP.docx</code><br>
-                    &nbsp;&nbsp;📎 <code>SOP_ActivityName.[ext]</code> — attach this in SOP section
-                </div>""", unsafe_allow_html=True)
-
-                st.download_button(
-                    "📥 Download ZIP",
-                    data=zip_bytes,
-                    file_name=f"{act}_{ven}_MOP_Package.zip",
-                    mime="application/zip"
-                )
-
-                found = [h for h in TEMPLATE_HEADINGS if h in extracted and h != "Standard Operating Procedure"]
-                not_found = [h for h in TEMPLATE_HEADINGS if h not in extracted and h != "Standard Operating Procedure"]
-                if found:
-                    st.info(f"✅ Found in input: {', '.join(found)}")
-                if not_found:
-                    st.warning(f"📝 Filled with defaults: {', '.join(not_found)}")
-
-            except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
-
-st.markdown("---")
-st.markdown("<small>🔒 No data stored. All processing is in-memory. Free to use.</small>", unsafe_allow_html=True)
-```
-
----
-
-## 📦 File 2: `requirements.txt`
-```
-streamlit
-python-docx
-pdfplumber
+        hr = hp.add
