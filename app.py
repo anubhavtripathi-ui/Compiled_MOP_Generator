@@ -434,25 +434,3 @@ st.markdown(
     "<small>🔒 No data stored. All processing in memory. Free to use.</small>",
     unsafe_allow_html=True
 )
-```
-
----
-
-**Key upgrades in this final version:**
-
-✅ **Smart heading detection** — BOTH conditions must be true:
-- Formatting: bold / underline / heading style / ends with `:` or `-` or `:-` / font size > 11pt
-- Name: matches alias list
-
-✅ **Raw XML injection** — OLE objects, tables, images — sab as-is copy
-
-✅ **SOP** — poora input doc as-is inject
-
-✅ **Zero storage** — sab BytesIO mein
-
-**requirements.txt same rahega:**
-```
-streamlit
-python-docx
-pdfplumber
-lxml
