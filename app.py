@@ -56,7 +56,7 @@ HEADING_ALIASES = {
                                       "step-by-step guide", "sop"],
     "Acceptance Criteria": ["acceptance criteria", "validation criteria", "test scenarios",
                              "approval conditions", "success parameters", "uat checklist",
-                             "uat", "acceptance", "uat scenarios"],
+                             "uat", "uat criteria", "acceptance", "uat scenarios"],
     "Assumptions": ["assumptions", "presumptions", "considerations", "operating assumptions"]
 }
 
@@ -371,3 +371,4 @@ if st.button("Generate MOP"):
 
 st.markdown("---")
 st.markdown("<small>No data is stored. All processing happens in memory. Free to use.</small>", unsafe_allow_html=True)
+
